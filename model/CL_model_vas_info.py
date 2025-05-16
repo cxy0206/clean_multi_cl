@@ -39,7 +39,7 @@ class FilterEmptyGraphs(torch.utils.data.Dataset):
 class GNNModelWithNewLoss(nn.Module):
     """GNN model with custom contrastive loss implementation"""
     def __init__(self, num_node_features, num_edge_features, num_global_features, 
-                 hidden_dim=256, dropout_rate=0.3, batch_size=32, datasize=False, 
+                 hidden_dim=256, dropout_rate=0.3, batch_size=512, datasize=False, 
                  device=None, property_index=0, loss_weights={'mse':1, 'rank':0}, save_path="models"):
         super().__init__()
         # Initialize model parameters
@@ -120,7 +120,7 @@ class GNNModelWithNewLoss(nn.Module):
         """Project embeddings through projection head"""
         return self.projection_head(embeddings)
 
-    def get_knn_positive_pairs(self, props, k=3, threshold=0.5):
+    def get_knn_positive_pairs(self, props, k=10, threshold=0.5):
         """
         get positive pairs based on k-nearest neighbors in the property space
         :param props: [n, d] tensor of properties
@@ -213,7 +213,7 @@ class GNNModelWithNewLoss(nn.Module):
 
 
     def train_model(self, dataset, num_epochs=300, lr=0.00005, weight_decay=1e-4, 
-                    patience=50, batch_size=512, best_val_loss_all=float('inf')):
+                    patience=50, batch_size=4096, best_val_loss_all=float('inf')):
         """Training procedure with early stopping"""
         save_path = self.save_path
         print(f"Training will be saved to: {save_path}")
