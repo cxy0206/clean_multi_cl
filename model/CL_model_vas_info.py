@@ -113,7 +113,8 @@ class GNNModelWithNewLoss(nn.Module):
         x = self.dropout(x)
         
         # Global mean pooling
-        graph_embedding = global_mean_pool(x, batch)
+        # graph_embedding = global_mean_pool(x, batch)
+        graph_embedding = x
         return graph_embedding
 
     def _project(self, embeddings):
