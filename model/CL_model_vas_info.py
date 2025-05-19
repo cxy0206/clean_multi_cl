@@ -311,32 +311,51 @@ class GNNModelWithNewLoss(nn.Module):
 
         with torch.no_grad():
             for batch in dataloader:
-                batch = batch.to(self.device)
-                raw_emb = self.forward(batch)
-                proj_emb = self._project(raw_emb)
-                prop = self.get_property(batch)
+                # 确保数据也移到正确的设备上
+                batch = batch.to(self.device)  # batch 移动到模型所在的设备
+                
+                # 确保模型的输出也在正确的设备上
+                raw_emb = self.forward(batch).to(self.device)
+                proj_emb = self._project(raw_emb).to(self.device)
+                
+                prop = self.get_property(batch).to(self.device)  # 确保prop也在正确的设备上
+                
                 n = batch.num_graphs
 
-                i, j = torch.combinations(torch.arange(n, device=self.device), 2).unbind(1)
-                if prop.shape[1] == 1:
-                    _prop_diff = torch.abs(prop[i] - prop[j])
+                if n > 1:
+                    i, j = torch.combinations(torch.arange(n, device=self.device), 2).unbind(1)
+
+                    if prop.shape[1] == 1:
+                        _prop_diff = torch.abs(prop[i] - prop[j])
+                    else:
+                        _prop_diff = 1 - F.cosine_similarity(prop[i], prop[j])
+
+                    _cos_dist = 1 - F.cosine_similarity(proj_emb[i], proj_emb[j])
+
+                    # 确保没有NaN或Inf
+                    if torch.any(torch.isnan(_prop_diff)) or torch.any(torch.isnan(_cos_dist)):
+                        print("NaN detected, skipping this batch.")
+                        continue
+
+                    prop_diffs.append(_prop_diff.cpu().numpy())
+                    combined_dists.append(_cos_dist.cpu().numpy())
                 else:
-                    _prop_diff = 1 - F.cosine_similarity(prop[i], prop[j])
-                
-                _cos_dist = 1 - F.cosine_similarity(proj_emb[i], proj_emb[j])
+                    print(f"Skipping batch with only {n} graph(s)")
 
-                prop_diffs.append(_prop_diff.cpu().numpy())
-                combined_dists.append(_cos_dist.cpu().numpy())
+        if prop_diffs and combined_dists:
+            prop_diffs = np.concatenate(prop_diffs)
+            combined_dists = np.concatenate(combined_dists)
 
-        prop_diffs = np.concatenate(prop_diffs)
-        combined_dists = np.concatenate(combined_dists)
+            # 绘制图表
+            plt.figure(figsize=(10,6))
+            plt.scatter(prop_diffs, combined_dists, alpha=0.6, edgecolors='w', linewidth=0.5)
+            plt.plot([0,1], [0,1], 'r--', linewidth=2)
+            plt.xlabel('Property Difference')
+            plt.ylabel('Embedding Distance')
+            plt.title(f'Validation Set: PropDiff vs EmbedDist')
+            plt.grid(True)
+            plt.savefig(os.path.join(save_path, "scatter_plot.png"))
+            plt.close()
+        else:
+            print("No valid data to plot.")
 
-        plt.figure(figsize=(10,6))
-        plt.scatter(prop_diffs, combined_dists, alpha=0.6, edgecolors='w', linewidth=0.5)
-        plt.plot([0,1], [0,1], 'r--', linewidth=2)
-        plt.xlabel('Property Difference')
-        plt.ylabel('Embedding Distance')
-        plt.title(f'Validation Set: PropDiff vs EmbedDist')
-        plt.grid(True)
-        plt.savefig(os.path.join(save_path, "scatter_plot.png"))
-        plt.close()
