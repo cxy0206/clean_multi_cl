@@ -38,11 +38,10 @@ class FilterEmptyGraphs(torch.utils.data.Dataset):
 
 class GNNModelWithNewLoss(nn.Module):
     """GNN model with custom contrastive loss implementation"""
-    def __init__(self, num_node_features, num_edge_features, num_global_features, 
+    def __init__(self, num_node_features, num_edge_features, num_global_features, cov_num=3, 
                  hidden_dim=256, dropout_rate=0.3, batch_size=512, datasize=False, 
                  device=None, property_index=0, loss_weights={'mse':1, 'rank':0}, save_path="models"):
         super().__init__()
-        # Initialize model parameters
         self.num_node_features = num_node_features
         self.num_edge_features = num_edge_features
         self.num_global_features = num_global_features
@@ -54,39 +53,32 @@ class GNNModelWithNewLoss(nn.Module):
         self.property_index = property_index
         self.loss_weights = loss_weights
         self.save_path = save_path
+        self.cov_num = cov_num
 
-        # Initialize GAT layers with edge feature handling
-        self.conv1 = GATConv(num_node_features, hidden_dim, 
-                            edge_dim=num_edge_features, add_self_loops=True)
-        self.conv2 = GATConv(hidden_dim, hidden_dim, 
-                            edge_dim=num_edge_features, add_self_loops=True)
-        self.conv3 = GATConv(hidden_dim, hidden_dim, 
-                            edge_dim=num_edge_features, add_self_loops=True)
-        
-        # Layer normalization
-        self.bn1 = nn.LayerNorm(hidden_dim)
-        self.bn2 = nn.LayerNorm(hidden_dim)
-        self.bn3 = nn.LayerNorm(hidden_dim)
+        # Initial projection from input to hidden_dim
+        self.initial_proj = nn.Linear(num_node_features, hidden_dim)
 
+        # GAT layers and normalization layers
+        self.convs = nn.ModuleList([
+            GATConv(hidden_dim, hidden_dim, edge_dim=num_edge_features, add_self_loops=True)
+            for _ in range(cov_num)
+        ])
+        self.norms = nn.ModuleList([
+            nn.LayerNorm(hidden_dim) for _ in range(cov_num)
+        ])
+
+        # Global features encoder
         self.global_encoder = nn.Linear(num_global_features, 32) if num_global_features > 0 else None
-        
+
         # Projection head for contrastive learning
-        if self.num_global_features == 0:
-            self.projection_head = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim//2),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate),
-                nn.Linear(hidden_dim//2, 64)
-            )
-        else:
-            self.projection_head = nn.Sequential(
-                nn.Linear(hidden_dim+32, hidden_dim//2),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate),
-                nn.Linear(hidden_dim//2, 64)
-            )
-        
-        # Loss calculation strategy
+        proj_input_dim = hidden_dim + (32 if num_global_features > 0 else 0)
+        self.projection_head = nn.Sequential(
+            nn.Linear(proj_input_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_dim // 2, 64)
+        )
+
         self.loss_method = "sampling" if datasize else "full_combination"
         self.dropout = nn.Dropout(dropout_rate)
 
@@ -96,42 +88,26 @@ class GNNModelWithNewLoss(nn.Module):
         return getattr(batch, property_name, None)
 
     def forward(self, data):
-        """Forward pass with attention weights tracking"""
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
-
-        if self.global_encoder is not None:
-            global_embedding = self.global_encoder(data.global_features)
-            
         batch = data.batch
         self.attention_weights = []
 
-        # First GAT layer
-        x, attn1 = self.conv1(x, edge_index, edge_attr=edge_attr, 
-                            return_attention_weights=True)
-        self.attention_weights.append(attn1)
-        x = F.relu(self.bn1(x))
-        x = self.dropout(x)
-        
-        # Second GAT layer
-        x, attn2 = self.conv2(x, edge_index, edge_attr=edge_attr, 
-                            return_attention_weights=True)
-        self.attention_weights.append(attn2)
-        x = F.relu(self.bn2(x))
-        x = self.dropout(x)
-        
-        # Third GAT layer
-        x, attn3 = self.conv3(x, edge_index, edge_attr=edge_attr,
-                            return_attention_weights=True)
-        self.attention_weights.append(attn3)
-        x = F.relu(self.bn3(x))
-        x = self.dropout(x)
-        
-        # Global mean pooling
-        # graph_embedding = global_mean_pool(x, batch)
+        x = self.initial_proj(x)
+
+        if self.global_encoder is not None:
+            global_embedding = self.global_encoder(data.global_features)
+
+        for conv, norm in zip(self.convs, self.norms):
+            x, attn = conv(x, edge_index, edge_attr=edge_attr, return_attention_weights=True)
+            self.attention_weights.append(attn)
+            x = F.relu(norm(x))
+            x = self.dropout(x)
+
         graph_embedding = global_mean_pool(x, batch)
 
         if self.global_encoder is not None:
             graph_embedding = torch.cat([graph_embedding, global_embedding], dim=1)
+
         return graph_embedding
 
     def _project(self, embeddings):
