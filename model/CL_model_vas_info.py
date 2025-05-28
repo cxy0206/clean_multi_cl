@@ -67,14 +67,24 @@ class GNNModelWithNewLoss(nn.Module):
         self.bn1 = nn.LayerNorm(hidden_dim)
         self.bn2 = nn.LayerNorm(hidden_dim)
         self.bn3 = nn.LayerNorm(hidden_dim)
+
+        self.global_encoder = nn.Linear(num_global_features, 32) if num_global_features > 0 else None
         
         # Projection head for contrastive learning
-        self.projection_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim//2),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(hidden_dim//2, 64)
-        )
+        if self.num_global_features == 0:
+            self.projection_head = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim//2),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate),
+                nn.Linear(hidden_dim//2, 64)
+            )
+        else:
+            self.projection_head = nn.Sequential(
+                nn.Linear(hidden_dim+32, hidden_dim//2),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate),
+                nn.Linear(hidden_dim//2, 64)
+            )
         
         # Loss calculation strategy
         self.loss_method = "sampling" if datasize else "full_combination"
@@ -88,6 +98,10 @@ class GNNModelWithNewLoss(nn.Module):
     def forward(self, data):
         """Forward pass with attention weights tracking"""
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+
+        if self.global_encoder is not None:
+            global_embedding = self.global_encoder(data.global_features)
+            
         batch = data.batch
         self.attention_weights = []
 
@@ -115,6 +129,9 @@ class GNNModelWithNewLoss(nn.Module):
         # Global mean pooling
         # graph_embedding = global_mean_pool(x, batch)
         graph_embedding = global_mean_pool(x, batch)
+
+        if self.global_encoder is not None:
+            graph_embedding = torch.cat([graph_embedding, global_embedding], dim=1)
         return graph_embedding
 
     def _project(self, embeddings):
@@ -142,8 +159,7 @@ class GNNModelWithNewLoss(nn.Module):
         pos_j = topk_idx[mask]
         
         return list(zip(pos_i.tolist(), pos_j.tolist()))
-
-
+    
     def get_loss(self, batch, temperature=0.1, k=5, vsa_threshold=0.05):
         """
         Compute contrastive loss using VSA-guided positive pairs and distance-based InfoNCE.
@@ -159,8 +175,7 @@ class GNNModelWithNewLoss(nn.Module):
         """
         if batch.num_graphs < 2:
             return torch.tensor(0.0, device=self.device)
-
-        self.eval()
+        
         with torch.no_grad():
             # Extract property vector (e.g., solubility, energy, etc.)
             prop = self.get_property(batch)
@@ -212,8 +227,7 @@ class GNNModelWithNewLoss(nn.Module):
 
         return loss
 
-
-    def train_model(self, dataset, num_epochs=300, lr=0.00005, weight_decay=1e-4, 
+    def train_model(self, dataset, num_epochs=1000, lr=0.00005, weight_decay=1e-4, 
                     patience=50, batch_size=4096, best_val_loss_all=float('inf')):
         """Training procedure with early stopping"""
         save_path = self.save_path
@@ -311,14 +325,12 @@ class GNNModelWithNewLoss(nn.Module):
 
         with torch.no_grad():
             for batch in dataloader:
-                # 确保数据也移到正确的设备上
-                batch = batch.to(self.device)  # batch 移动到模型所在的设备
+                batch = batch.to(self.device) 
                 
-                # 确保模型的输出也在正确的设备上
                 raw_emb = self.forward(batch).to(self.device)
                 proj_emb = self._project(raw_emb).to(self.device)
                 
-                prop = self.get_property(batch).to(self.device)  # 确保prop也在正确的设备上
+                prop = self.get_property(batch).to(self.device)  
                 
                 n = batch.num_graphs
 
@@ -332,7 +344,6 @@ class GNNModelWithNewLoss(nn.Module):
 
                     _cos_dist = 1 - F.cosine_similarity(proj_emb[i], proj_emb[j])
 
-                    # 确保没有NaN或Inf
                     if torch.any(torch.isnan(_prop_diff)) or torch.any(torch.isnan(_cos_dist)):
                         print("NaN detected, skipping this batch.")
                         continue
@@ -346,7 +357,6 @@ class GNNModelWithNewLoss(nn.Module):
             prop_diffs = np.concatenate(prop_diffs)
             combined_dists = np.concatenate(combined_dists)
 
-            # 绘制图表
             plt.figure(figsize=(10,6))
             plt.scatter(prop_diffs, combined_dists, alpha=0.6, edgecolors='w', linewidth=0.5)
             plt.plot([0,1], [0,1], 'r--', linewidth=2)
