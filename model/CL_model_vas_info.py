@@ -204,7 +204,7 @@ class GNNModelWithNewLoss(nn.Module):
         return loss
 
     def train_model(self, dataset, num_epochs=1000, lr=0.00005, weight_decay=1e-4, 
-                    patience=50, batch_size=4096, best_val_loss_all=float('inf')):
+                    patience=50, batch_size=128, best_val_loss_all=float('inf')):
         """Training procedure with early stopping"""
         save_path = self.save_path
         print(f"Training will be saved to: {save_path}")
