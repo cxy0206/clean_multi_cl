@@ -116,25 +116,36 @@ class GNNModelWithNewLoss(nn.Module):
 
     def get_knn_positive_pairs(self, props, k=10, threshold=0.5):
         """
-        get positive pairs based on k-nearest neighbors in the property space
+        Get symmetric positive pairs using mutual kNN in property space.
+        A pair (i, j) is considered positive if i is in j's top-k and j is in i's top-k neighbors,
+        and their distance is below the given threshold.
+        
         :param props: [n, d] tensor of properties
+        :return: list of (i, j) index pairs with i < j (no duplicate/reverse)
         """
-        props = props.to(self.device).float() 
+        props = props.to(self.device).float()
 
+        # Compute cosine distance: 1 - cosine similarity
         sim_matrix = F.cosine_similarity(props.unsqueeze(1), props.unsqueeze(0), dim=-1)
-        dist_matrix = 1 - sim_matrix  
-
+        dist_matrix = 1 - sim_matrix  # [n, n]
+        
         n = props.size(0)
         dist_matrix.fill_diagonal_(float('inf'))
 
-        topk_dist, topk_idx = torch.topk(dist_matrix, k=k, dim=1, largest=False)
+        # Get kNN indices
+        _, knn_indices = torch.topk(dist_matrix, k=k, dim=1, largest=False)  # [n, k]
 
-        mask = topk_dist < threshold  
-        row_idx = torch.arange(n, device=self.device).unsqueeze(1).expand(-1, k)
-        pos_i = row_idx[mask]
-        pos_j = topk_idx[mask]
-        
-        return list(zip(pos_i.tolist(), pos_j.tolist()))
+        # Build mutual kNN set
+        mutual_pairs = set()
+        for i in range(n):
+            for j in knn_indices[i]:
+                j = j.item()
+                if i in knn_indices[j]:  # mutual neighbor
+                    if dist_matrix[i, j] < threshold:
+                        # Add (min, max) to avoid duplicate reverse pairs
+                        mutual_pairs.add((min(i, j), max(i, j)))
+
+        return list(mutual_pairs)
     
     def get_loss(self, batch, temperature=0.1, k=5, vsa_threshold=0.05):
         """
