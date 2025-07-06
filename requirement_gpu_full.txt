@@ -1,0 +1,19 @@
+bayes_opt==1.4.3
+matplotlib==3.7.1
+numpy==1.24.4
+pandas==1.5.3
+rdkit==2023.3.2
+scikit-learn==1.2.2
+torch==2.1.2
+torchvision==0.16.2
+torchaudio==2.1.2
+pytorch-cuda==11.8 ; platform_system != 'Darwin'
+torch_geometric==2.5.3
+tqdm==4.66.1
+
+# PyG required CUDA extensions (need correct -f link during installation)
+pyg_lib
+torch_scatter
+torch_sparse
+torch_cluster
+torch_spline_conv
